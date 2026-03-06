@@ -1,0 +1,42 @@
+{
+	"name": "seatalk-relay",
+	"version": "0.1.0",
+	"description": "SeaTalk webhook relay service for OpenClaw SeaTalk plugin",
+	"type": "module",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/lf4096/seatalk-relay.git"
+	},
+	"homepage": "https://github.com/lf4096/seatalk-relay#readme",
+	"bugs": "https://github.com/lf4096/seatalk-relay/issues",
+	"keywords": ["seatalk", "relay", "webhook", "websocket", "openclaw"],
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"bin": {
+		"seatalk-relay": "dist/seatalk-relay.js"
+	},
+	"files": ["dist/"],
+	"scripts": {
+		"dev": "node --import=tsx index.ts",
+		"build": "esbuild index.ts --bundle --platform=node --format=esm --packages=external --banner:js='#!/usr/bin/env node' --outfile=dist/seatalk-relay.js",
+		"prepublishOnly": "npm run build",
+		"start": "node dist/seatalk-relay.js",
+		"format": "biome format --write .",
+		"lint": "biome lint .",
+		"check": "biome check ."
+	},
+	"dependencies": {
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.0",
+		"@types/ws": "^8.5.0",
+		"esbuild": "^0.25.0",
+		"tsx": "^4.19.0"
+	},
+	"pnpm": {
+		"onlyBuiltDependencies": ["@biomejs/biome", "esbuild"]
+	}
+}
