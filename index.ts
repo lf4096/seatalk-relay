@@ -38,7 +38,17 @@ type ClientEntry = {
 
 type RelayMessage = { type: "auth"; appId: string; appSecret: string; signingSecret: string };
 
+type BufferedEvent = {
+	rawBody: Buffer;
+	signature: string | undefined;
+	parsed: Record<string, unknown>;
+	expiresAt: number;
+};
+
 const clients = new Map<string, ClientEntry>();
+const eventBuffer = new Map<string, BufferedEvent[]>();
+const EVENT_BUFFER_TTL_MS = 5 * 60 * 1000;
+const MAX_BUFFER_PER_APP = 100;
 
 function verifySignature(rawBody: Buffer, signingSecret: string, signature: string): boolean {
 	const secretBytes = Buffer.from(signingSecret, "latin1");
@@ -98,6 +108,44 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
 	});
 }
 
+function bufferEvent(appId: string, entry: BufferedEvent): void {
+	const now = Date.now();
+	const queue = (eventBuffer.get(appId) ?? []).filter((e) => e.expiresAt > now);
+	if (queue.length >= MAX_BUFFER_PER_APP) {
+		queue.shift();
+	}
+	queue.push(entry);
+	eventBuffer.set(appId, queue);
+}
+
+function flushBuffer(appId: string, client: ClientEntry): void {
+	const queue = eventBuffer.get(appId);
+	if (!queue || queue.length === 0) return;
+
+	const now = Date.now();
+	let forwarded = 0;
+	let dropped = 0;
+	for (const entry of queue) {
+		if (entry.expiresAt <= now) {
+			dropped++;
+			continue;
+		}
+		if (
+			entry.signature &&
+			!verifySignature(entry.rawBody, client.signingSecret, entry.signature)
+		) {
+			dropped++;
+			continue;
+		}
+		send(client.ws, { type: "event", event: entry.parsed });
+		forwarded++;
+	}
+	eventBuffer.delete(appId);
+	log(
+		`buffer: flushed ${forwarded} event(s) for appId=${appId}${dropped ? `, dropped ${dropped}` : ""}`,
+	);
+}
+
 function setupClientAuth(ws: WebSocket): void {
 	const authTimer = setTimeout(() => {
 		log("ws: auth timeout, closing");
@@ -148,6 +196,7 @@ function setupClientAuth(ws: WebSocket): void {
 		clients.set(msg.appId, entry);
 		send(ws, { type: "auth_ok" });
 		log(`ws: client authenticated appId=${msg.appId} (total=${clients.size})`);
+		flushBuffer(msg.appId, entry);
 
 		ws.on("error", (err) => {
 			log(`ws: error appId=${msg.appId}: ${err.message}`);
@@ -212,7 +261,16 @@ async function handleWebhook(req: http.IncomingMessage, res: http.ServerResponse
 	}
 
 	if (!client) {
-		log(`webhook: no client connected for appId=${appId}, dropping event`);
+		const signature = req.headers.signature as string | undefined;
+		bufferEvent(appId, {
+			rawBody,
+			signature,
+			parsed: body,
+			expiresAt: Date.now() + EVENT_BUFFER_TTL_MS,
+		});
+		log(
+			`webhook: no client for appId=${appId}, buffered ${body.event_type} (queue=${eventBuffer.get(appId)?.length})`,
+		);
 		res.writeHead(200);
 		res.end("OK");
 		return;
@@ -254,6 +312,15 @@ function startHeartbeat(): void {
 				continue;
 			}
 			send(entry.ws, { type: "ping" });
+		}
+		const now = Date.now();
+		for (const [appId, queue] of eventBuffer) {
+			const remaining = queue.filter((e) => e.expiresAt > now);
+			if (remaining.length === 0) {
+				eventBuffer.delete(appId);
+			} else if (remaining.length < queue.length) {
+				eventBuffer.set(appId, remaining);
+			}
 		}
 	}, PING_INTERVAL_MS);
 }

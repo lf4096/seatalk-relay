@@ -58,7 +58,8 @@ node --env-file=.env $(which seatalk-relay)
 2. Relay validates credentials against SeaTalk token API
 3. SeaTalk webhooks arrive at the callback path; relay verifies signature using the client's `signingSecret`
 4. Verified events are forwarded to the matching client connection
-5. `event_verification` challenges are handled directly by the relay
+5. If no client is connected, events are buffered for up to 5 minutes and delivered when the client reconnects
+6. `event_verification` challenges are handled directly by the relay
 
 ### Duplicate appId Policy
 
